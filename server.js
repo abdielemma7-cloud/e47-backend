@@ -1,41 +1,24 @@
-const express = require("express");
-const axios = require("axios");
-const cors = require("cors");
-const admin = require("firebase-admin");
-require("dotenv").config();
+import express from "express";
+import cors from "cors";
+import bodyParser from "body-parser";
+import axios from "axios";
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(bodyParser.json());
 
-/* ================= FIREBASE (FIXED INIT) =================
-   We removed serviceAccountKey.json because it was broken
-   and caused deployment failure.
-*/
+// ======================= M-PESA CONFIG =======================
+const consumerKey = "YOUR_KEY";
+const consumerSecret = "YOUR_SECRET";
+const shortcode = "174379"; // sandbox
+const passkey = "YOUR_PASSKEY";
+const callbackURL = "https://your-backend-url/mpesa-callback";
 
-admin.initializeApp({
-  credential: admin.credential.applicationDefault()
-});
-
-const db = admin.firestore();
-
-/* ================= ENV VARIABLES ================= */
-
-const {
-  CONSUMER_KEY,
-  CONSUMER_SECRET,
-  SHORTCODE,
-  PASSKEY
-} = process.env;
-
-/* ================= ACCESS TOKEN ================= */
-
+// ======================= ACCESS TOKEN =======================
 async function getAccessToken() {
-  const auth = Buffer.from(
-    `${CONSUMER_KEY}:${CONSUMER_SECRET}`
-  ).toString("base64");
+  const auth = Buffer.from(`${consumerKey}:${consumerSecret}`).toString("base64");
 
-  const response = await axios.get(
+  const res = await axios.get(
     "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials",
     {
       headers: {
@@ -44,43 +27,40 @@ async function getAccessToken() {
     }
   );
 
-  return response.data.access_token;
+  return res.data.access_token;
 }
 
-/* ================= STK PUSH ================= */
-
+// ======================= STK PUSH =======================
 app.post("/stkpush", async (req, res) => {
-
   try {
-
-    const { phone, amount } = req.body;
+    const { phone, amount, productId, buyerEmail, farmerEmail } = req.body;
 
     const token = await getAccessToken();
 
     const timestamp = new Date()
       .toISOString()
-      .replace(/[-T:\.Z]/g, "")
+      .replace(/[-T:.Z]/g, "")
       .slice(0, 14);
 
-    const password = Buffer.from(
-      SHORTCODE + PASSKEY + timestamp
-    ).toString("base64");
+    const password = Buffer.from(shortcode + passkey + timestamp).toString("base64");
+
+    const stkData = {
+      BusinessShortCode: shortcode,
+      Password: password,
+      Timestamp: timestamp,
+      TransactionType: "CustomerPayBillOnline",
+      Amount: amount,
+      PartyA: phone,
+      PartyB: shortcode,
+      PhoneNumber: phone,
+      CallBackURL: callbackURL,
+      AccountReference: productId,
+      TransactionDesc: "E47 Payment"
+    };
 
     const response = await axios.post(
       "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest",
-      {
-        BusinessShortCode: SHORTCODE,
-        Password: password,
-        Timestamp: timestamp,
-        TransactionType: "CustomerPayBillOnline",
-        Amount: amount,
-        PartyA: phone,
-        PartyB: SHORTCODE,
-        PhoneNumber: phone,
-        CallBackURL: "https://e47-backend-production.up.railway.app/callback",
-        AccountReference: "E-47 FARMERS",
-        TransactionDesc: "Farm Payment"
-      },
+      stkData,
       {
         headers: {
           Authorization: `Bearer ${token}`
@@ -88,61 +68,54 @@ app.post("/stkpush", async (req, res) => {
       }
     );
 
-    res.json(response.data);
+    res.json({
+      success: true,
+      message: "STK Push sent",
+      data: response.data
+    });
 
-  } catch (error) {
-    console.log("STK ERROR:", error.message);
+  } catch (err) {
+    console.log(err.response?.data || err.message);
     res.json({ success: false });
   }
 });
 
-/* ================= CALLBACK (DELIVERY SYSTEM) ================= */
-
-app.post("/callback", async (req, res) => {
+// ======================= CALLBACK =======================
+app.post("/mpesa-callback", async (req, res) => {
   try {
+    const data = req.body;
 
-    const result = req.body.Body.stkCallback;
+    console.log("📩 M-PESA CALLBACK:", JSON.stringify(data, null, 2));
 
-    console.log("CALLBACK RECEIVED:", JSON.stringify(req.body, null, 2));
+    const result = data?.Body?.stkCallback;
 
-    if (result.ResultCode !== 0) {
-      return res.sendStatus(200);
+    if (result?.ResultCode === 0) {
+
+      const meta = result.CallbackMetadata.Item;
+
+      const phone = meta.find(i => i.Name === "PhoneNumber")?.Value;
+      const amount = meta.find(i => i.Name === "Amount")?.Value;
+      const receipt = meta.find(i => i.Name === "MpesaReceiptNumber")?.Value;
+
+      console.log("✅ PAYMENT SUCCESS:", {
+        phone,
+        amount,
+        receipt
+      });
+
+      // 👉 HERE YOU WOULD SAVE TO FIRESTORE OR DATABASE
+      // (orders auto-confirmation happens here)
+
     }
 
-    const items = result.CallbackMetadata.Item;
+    res.json({ ResultCode: 0, ResultDesc: "Success" });
 
-    const order = {
-      phone: items.find(i => i.Name === "PhoneNumber").Value,
-      amount: items.find(i => i.Name === "Amount").Value,
-      receipt: items.find(i => i.Name === "MpesaReceiptNumber").Value,
-      transactionDate: items.find(i => i.Name === "TransactionDate").Value,
-
-      status: "processing", // 🚚 delivery system start
-      createdAt: new Date()
-    };
-
-    await db.collection("orders").add(order);
-
-    console.log("ORDER SAVED ✔");
-
-    res.sendStatus(200);
-
-  } catch (error) {
-    console.log("CALLBACK ERROR:", error);
-    res.sendStatus(200);
+  } catch (err) {
+    console.log(err.message);
+    res.json({ ResultCode: 1 });
   }
 });
 
-/* ================= TEST ROUTE ================= */
-
-app.get("/", (req, res) => {
-  res.send("E-47 Backend Running ✔");
-});
-
-/* ================= START SERVER ================= */
-
+// ======================= START SERVER =======================
 const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log("Server running on port " + PORT);
-});
+app.listen(PORT, () => console.log("🚀 Server running on", PORT));
