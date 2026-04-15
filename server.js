@@ -1,15 +1,27 @@
 const express = require("express");
 const axios = require("axios");
 const cors = require("cors");
+const admin = require("firebase-admin");
 require("dotenv").config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ===============================
-// 🔐 ENV VARIABLES (from Railway)
-// ===============================
+/* =========================
+   🔥 FIREBASE INIT
+========================= */
+const serviceAccount = require("./serviceAccountKey.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
+
+const db = admin.firestore();
+
+/* =========================
+   🔐 ENV VARIABLES
+========================= */
 const {
   CONSUMER_KEY,
   CONSUMER_SECRET,
@@ -17,11 +29,13 @@ const {
   PASSKEY
 } = process.env;
 
-// ===============================
-// 🔑 GET ACCESS TOKEN
-// ===============================
+/* =========================
+   🔑 ACCESS TOKEN
+========================= */
 async function getAccessToken() {
-  const auth = Buffer.from(`${CONSUMER_KEY}:${CONSUMER_SECRET}`).toString("base64");
+  const auth = Buffer.from(
+    `${CONSUMER_KEY}:${CONSUMER_SECRET}`
+  ).toString("base64");
 
   const response = await axios.get(
     "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials",
@@ -35,14 +49,14 @@ async function getAccessToken() {
   return response.data.access_token;
 }
 
-// ===============================
-// 💰 STK PUSH (REAL M-PESA)
-// ===============================
+/* =========================
+   💰 STK PUSH
+========================= */
 app.post("/stkpush", async (req, res) => {
 
   try {
 
-    const { phone, amount } = req.body;
+    const { phone, amount, productId, buyerEmail, farmerEmail } = req.body;
 
     const token = await getAccessToken();
 
@@ -55,7 +69,7 @@ app.post("/stkpush", async (req, res) => {
       SHORTCODE + PASSKEY + timestamp
     ).toString("base64");
 
-    const stkResponse = await axios.post(
+    const response = await axios.post(
       "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest",
       {
         BusinessShortCode: SHORTCODE,
@@ -67,7 +81,7 @@ app.post("/stkpush", async (req, res) => {
         PartyB: SHORTCODE,
         PhoneNumber: phone,
         CallBackURL: "https://e47-backend-production.up.railway.app/callback",
-        AccountReference: "E47 FARMERS",
+        AccountReference: "E-47 FARMERS",
         TransactionDesc: "Farm Product Payment"
       },
       {
@@ -79,38 +93,70 @@ app.post("/stkpush", async (req, res) => {
 
     res.json({
       success: true,
-      message: "STK Push sent",
-      data: stkResponse.data
+      message: "STK Push Sent",
+      data: response.data
     });
 
   } catch (error) {
     console.log(error.message);
     res.json({
       success: false,
-      message: "STK Push failed"
+      message: "STK Push Failed"
     });
   }
 });
 
-// ===============================
-// 📩 CALLBACK (Payment Result)
-// ===============================
-app.post("/callback", (req, res) => {
-  console.log("M-PESA CALLBACK:", JSON.stringify(req.body, null, 2));
+/* =========================
+   📩 CALLBACK (FINAL)
+   SAVE PAYMENT TO FIREBASE
+========================= */
+app.post("/callback", async (req, res) => {
 
-  res.sendStatus(200);
+  try {
+
+    const result = req.body.Body.stkCallback;
+
+    console.log("CALLBACK RECEIVED:", JSON.stringify(req.body, null, 2));
+
+    // ❌ PAYMENT FAILED
+    if (result.ResultCode !== 0) {
+      return res.sendStatus(200);
+    }
+
+    const items = result.CallbackMetadata.Item;
+
+    const paymentData = {
+      amount: items.find(i => i.Name === "Amount").Value,
+      phone: items.find(i => i.Name === "PhoneNumber").Value,
+      receipt: items.find(i => i.Name === "MpesaReceiptNumber").Value,
+      transactionDate: items.find(i => i.Name === "TransactionDate").Value,
+      status: "paid",
+      createdAt: new Date()
+    };
+
+    // 💾 SAVE TO FIREBASE
+    await db.collection("orders").add(paymentData);
+
+    console.log("PAYMENT SAVED ✔", paymentData);
+
+    res.sendStatus(200);
+
+  } catch (error) {
+    console.log("Callback Error:", error.message);
+    res.sendStatus(200);
+  }
 });
 
-// ===============================
-// 🌐 TEST ROUTE
-// ===============================
+/* =========================
+   🌐 TEST ROUTE
+========================= */
 app.get("/", (req, res) => {
-  res.send("E-47 Farmers M-PESA Backend Running 🚀");
+  res.send("E-47 Farmers Backend Running 🚀");
 });
 
-// ===============================
-// 🚀 START SERVER
-// ===============================
+/* =========================
+   🚀 START SERVER
+========================= */
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
