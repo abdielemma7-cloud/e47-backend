@@ -8,9 +8,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* =========================
-   🔥 FIREBASE INIT
-========================= */
+// ================= FIREBASE =================
 const serviceAccount = require("./serviceAccountKey.json");
 
 admin.initializeApp({
@@ -19,9 +17,7 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
-/* =========================
-   🔐 ENV VARIABLES
-========================= */
+// ================= ENV =================
 const {
   CONSUMER_KEY,
   CONSUMER_SECRET,
@@ -29,9 +25,7 @@ const {
   PASSKEY
 } = process.env;
 
-/* =========================
-   🔑 ACCESS TOKEN
-========================= */
+// ================= ACCESS TOKEN =================
 async function getAccessToken() {
   const auth = Buffer.from(
     `${CONSUMER_KEY}:${CONSUMER_SECRET}`
@@ -49,14 +43,12 @@ async function getAccessToken() {
   return response.data.access_token;
 }
 
-/* =========================
-   💰 STK PUSH
-========================= */
+// ================= STK PUSH =================
 app.post("/stkpush", async (req, res) => {
 
   try {
 
-    const { phone, amount, productId, buyerEmail, farmerEmail } = req.body;
+    const { phone, amount } = req.body;
 
     const token = await getAccessToken();
 
@@ -82,7 +74,7 @@ app.post("/stkpush", async (req, res) => {
         PhoneNumber: phone,
         CallBackURL: "https://e47-backend-production.up.railway.app/callback",
         AccountReference: "E-47 FARMERS",
-        TransactionDesc: "Farm Product Payment"
+        TransactionDesc: "Farm Payment"
       },
       {
         headers: {
@@ -91,72 +83,48 @@ app.post("/stkpush", async (req, res) => {
       }
     );
 
-    res.json({
-      success: true,
-      message: "STK Push Sent",
-      data: response.data
-    });
+    res.json(response.data);
 
   } catch (error) {
     console.log(error.message);
-    res.json({
-      success: false,
-      message: "STK Push Failed"
-    });
+    res.json({ success: false });
   }
 });
 
-/* =========================
-   📩 CALLBACK (FINAL)
-   SAVE PAYMENT TO FIREBASE
-========================= */
+// ================= CALLBACK (DELIVERY SYSTEM) =================
 app.post("/callback", async (req, res) => {
-
   try {
 
     const result = req.body.Body.stkCallback;
 
-    console.log("CALLBACK RECEIVED:", JSON.stringify(req.body, null, 2));
+    console.log("CALLBACK:", JSON.stringify(req.body, null, 2));
 
-    // ❌ PAYMENT FAILED
     if (result.ResultCode !== 0) {
       return res.sendStatus(200);
     }
 
     const items = result.CallbackMetadata.Item;
 
-    const paymentData = {
-      amount: items.find(i => i.Name === "Amount").Value,
+    const order = {
       phone: items.find(i => i.Name === "PhoneNumber").Value,
+      amount: items.find(i => i.Name === "Amount").Value,
       receipt: items.find(i => i.Name === "MpesaReceiptNumber").Value,
       transactionDate: items.find(i => i.Name === "TransactionDate").Value,
-      status: "paid",
+      status: "processing",
       createdAt: new Date()
     };
 
-    // 💾 SAVE TO FIREBASE
-    await db.collection("orders").add(paymentData);
-
-    console.log("PAYMENT SAVED ✔", paymentData);
+    await db.collection("orders").add(order);
 
     res.sendStatus(200);
 
   } catch (error) {
-    console.log("Callback Error:", error.message);
+    console.log(error);
     res.sendStatus(200);
   }
 });
 
-/* =========================
-   🌐 TEST ROUTE
-========================= */
-app.get("/", (req, res) => {
-  res.send("E-47 Farmers Backend Running 🚀");
-});
-
-/* =========================
-   🚀 START SERVER
-========================= */
+// ================= SERVER =================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
