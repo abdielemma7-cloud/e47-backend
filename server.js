@@ -7,7 +7,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 🔐 ENV VARIABLES
+// ===============================
+// 🔐 ENV VARIABLES (from Railway)
+// ===============================
 const {
   CONSUMER_KEY,
   CONSUMER_SECRET,
@@ -15,11 +17,13 @@ const {
   PASSKEY
 } = process.env;
 
+// ===============================
 // 🔑 GET ACCESS TOKEN
-async function getToken() {
+// ===============================
+async function getAccessToken() {
   const auth = Buffer.from(`${CONSUMER_KEY}:${CONSUMER_SECRET}`).toString("base64");
 
-  const res = await axios.get(
+  const response = await axios.get(
     "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials",
     {
       headers: {
@@ -28,17 +32,19 @@ async function getToken() {
     }
   );
 
-  return res.data.access_token;
+  return response.data.access_token;
 }
 
-// 💰 STK PUSH
+// ===============================
+// 💰 STK PUSH (REAL M-PESA)
+// ===============================
 app.post("/stkpush", async (req, res) => {
 
   try {
 
     const { phone, amount } = req.body;
 
-    const token = await getToken();
+    const token = await getAccessToken();
 
     const timestamp = new Date()
       .toISOString()
@@ -49,7 +55,7 @@ app.post("/stkpush", async (req, res) => {
       SHORTCODE + PASSKEY + timestamp
     ).toString("base64");
 
-    const response = await axios.post(
+    const stkResponse = await axios.post(
       "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest",
       {
         BusinessShortCode: SHORTCODE,
@@ -60,8 +66,8 @@ app.post("/stkpush", async (req, res) => {
         PartyA: phone,
         PartyB: SHORTCODE,
         PhoneNumber: phone,
-        CallBackURL: "https://yourdomain.com/callback",
-        AccountReference: "E-47 FARMERS",
+        CallBackURL: "https://e47-backend-production.up.railway.app/callback",
+        AccountReference: "E47 FARMERS",
         TransactionDesc: "Farm Product Payment"
       },
       {
@@ -73,23 +79,38 @@ app.post("/stkpush", async (req, res) => {
 
     res.json({
       success: true,
-      data: response.data
+      message: "STK Push sent",
+      data: stkResponse.data
     });
 
   } catch (error) {
-    console.log(error);
+    console.log(error.message);
     res.json({
-      success: false
+      success: false,
+      message: "STK Push failed"
     });
   }
 });
 
-// 🌐 TEST ROUTE (VERY IMPORTANT)
-app.get("/", (req, res) => {
-  res.send("E-47 Backend Running 🚀");
+// ===============================
+// 📩 CALLBACK (Payment Result)
+// ===============================
+app.post("/callback", (req, res) => {
+  console.log("M-PESA CALLBACK:", JSON.stringify(req.body, null, 2));
+
+  res.sendStatus(200);
 });
 
+// ===============================
+// 🌐 TEST ROUTE
+// ===============================
+app.get("/", (req, res) => {
+  res.send("E-47 Farmers M-PESA Backend Running 🚀");
+});
+
+// ===============================
 // 🚀 START SERVER
+// ===============================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
