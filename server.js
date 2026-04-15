@@ -1,20 +1,30 @@
+// ================= IMPORTS =================
 import express from "express";
 import cors from "cors";
 import bodyParser from "body-parser";
 import axios from "axios";
+import admin from "firebase-admin";
 
+// ================= FIREBASE (SAFE INIT) =================
+admin.initializeApp({
+  credential: admin.credential.applicationDefault()
+});
+
+const db = admin.firestore();
+
+// ================= APP CONFIG =================
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-// ======================= M-PESA CONFIG =======================
-const consumerKey = "YOUR_KEY";
-const consumerSecret = "YOUR_SECRET";
+// ================= M-PESA CONFIG =================
+const consumerKey = "YOUR_CONSUMER_KEY";
+const consumerSecret = "YOUR_CONSUMER_SECRET";
 const shortcode = "174379"; // sandbox
 const passkey = "YOUR_PASSKEY";
-const callbackURL = "https://your-backend-url/mpesa-callback";
+const callbackURL = "https://e47-backend-production.up.railway.app/mpesa-callback";
 
-// ======================= ACCESS TOKEN =======================
+// ================= GET ACCESS TOKEN =================
 async function getAccessToken() {
   const auth = Buffer.from(`${consumerKey}:${consumerSecret}`).toString("base64");
 
@@ -30,7 +40,7 @@ async function getAccessToken() {
   return res.data.access_token;
 }
 
-// ======================= STK PUSH =======================
+// ================= STK PUSH =================
 app.post("/stkpush", async (req, res) => {
   try {
     const { phone, amount, productId, buyerEmail, farmerEmail } = req.body;
@@ -76,16 +86,20 @@ app.post("/stkpush", async (req, res) => {
 
   } catch (err) {
     console.log(err.response?.data || err.message);
-    res.json({ success: false });
+
+    res.json({
+      success: false,
+      message: "STK failed"
+    });
   }
 });
 
-// ======================= CALLBACK =======================
+// ================= CALLBACK =================
 app.post("/mpesa-callback", async (req, res) => {
   try {
     const data = req.body;
 
-    console.log("📩 M-PESA CALLBACK:", JSON.stringify(data, null, 2));
+    console.log("📩 CALLBACK RECEIVED:", JSON.stringify(data, null, 2));
 
     const result = data?.Body?.stkCallback;
 
@@ -97,25 +111,39 @@ app.post("/mpesa-callback", async (req, res) => {
       const amount = meta.find(i => i.Name === "Amount")?.Value;
       const receipt = meta.find(i => i.Name === "MpesaReceiptNumber")?.Value;
 
-      console.log("✅ PAYMENT SUCCESS:", {
+      console.log("✅ PAYMENT SUCCESS:", phone, amount, receipt);
+
+      // ================= SAVE ORDER =================
+      await db.collection("orders").add({
         phone,
         amount,
-        receipt
+        receipt,
+        status: "paid",
+        createdAt: new Date()
       });
 
-      // 👉 HERE YOU WOULD SAVE TO FIRESTORE OR DATABASE
-      // (orders auto-confirmation happens here)
-
+    } else {
+      console.log("❌ PAYMENT FAILED");
     }
 
-    res.json({ ResultCode: 0, ResultDesc: "Success" });
+    res.json({
+      ResultCode: 0,
+      ResultDesc: "Accepted"
+    });
 
   } catch (err) {
     console.log(err.message);
-    res.json({ ResultCode: 1 });
+
+    res.json({
+      ResultCode: 1,
+      ResultDesc: "Error"
+    });
   }
 });
 
-// ======================= START SERVER =======================
+// ================= START SERVER =================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("🚀 Server running on", PORT));
+
+app.listen(PORT, () => {
+  console.log("🚀 Server running on port", PORT);
+});
