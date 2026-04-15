@@ -1,7 +1,6 @@
 {
   "name": "e47-backend",
   "version": "1.0.0",
-  "description": "E-47 Farmers M-PESA Backend",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
