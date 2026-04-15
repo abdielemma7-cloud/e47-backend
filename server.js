@@ -8,16 +8,19 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ================= FIREBASE =================
-const serviceAccount = require("./serviceAccountKey.json");
+/* ================= FIREBASE (FIXED INIT) =================
+   We removed serviceAccountKey.json because it was broken
+   and caused deployment failure.
+*/
 
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
+  credential: admin.credential.applicationDefault()
 });
 
 const db = admin.firestore();
 
-// ================= ENV =================
+/* ================= ENV VARIABLES ================= */
+
 const {
   CONSUMER_KEY,
   CONSUMER_SECRET,
@@ -25,7 +28,8 @@ const {
   PASSKEY
 } = process.env;
 
-// ================= ACCESS TOKEN =================
+/* ================= ACCESS TOKEN ================= */
+
 async function getAccessToken() {
   const auth = Buffer.from(
     `${CONSUMER_KEY}:${CONSUMER_SECRET}`
@@ -43,7 +47,8 @@ async function getAccessToken() {
   return response.data.access_token;
 }
 
-// ================= STK PUSH =================
+/* ================= STK PUSH ================= */
+
 app.post("/stkpush", async (req, res) => {
 
   try {
@@ -86,18 +91,19 @@ app.post("/stkpush", async (req, res) => {
     res.json(response.data);
 
   } catch (error) {
-    console.log(error.message);
+    console.log("STK ERROR:", error.message);
     res.json({ success: false });
   }
 });
 
-// ================= CALLBACK (DELIVERY SYSTEM) =================
+/* ================= CALLBACK (DELIVERY SYSTEM) ================= */
+
 app.post("/callback", async (req, res) => {
   try {
 
     const result = req.body.Body.stkCallback;
 
-    console.log("CALLBACK:", JSON.stringify(req.body, null, 2));
+    console.log("CALLBACK RECEIVED:", JSON.stringify(req.body, null, 2));
 
     if (result.ResultCode !== 0) {
       return res.sendStatus(200);
@@ -110,21 +116,31 @@ app.post("/callback", async (req, res) => {
       amount: items.find(i => i.Name === "Amount").Value,
       receipt: items.find(i => i.Name === "MpesaReceiptNumber").Value,
       transactionDate: items.find(i => i.Name === "TransactionDate").Value,
-      status: "processing",
+
+      status: "processing", // 🚚 delivery system start
       createdAt: new Date()
     };
 
     await db.collection("orders").add(order);
 
+    console.log("ORDER SAVED ✔");
+
     res.sendStatus(200);
 
   } catch (error) {
-    console.log(error);
+    console.log("CALLBACK ERROR:", error);
     res.sendStatus(200);
   }
 });
 
-// ================= SERVER =================
+/* ================= TEST ROUTE ================= */
+
+app.get("/", (req, res) => {
+  res.send("E-47 Backend Running ✔");
+});
+
+/* ================= START SERVER ================= */
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
